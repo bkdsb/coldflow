@@ -269,7 +269,7 @@ export const generateDiagnosticScript = (lead: Lead, variant: 'full' | 'micro' =
   const validYears = Number.isFinite(years) && years > 0;
   const yearsLine = validYears ? `Há ${years} ano${years === 1 ? '' : 's'} no mercado.` : '';
   const yearsInsightLine = validYears
-    ? years >= 10
+    ? years > 5
       ? `Esse tempo de mercado já traz legado, confiança e estrutura; o digital precisa refletir essa autoridade e converter melhor quem ainda não conhece o nome de vocês.`
       : `Esse tempo de mercado pede crescimento e reconhecimento, e o digital ajuda a competir com quem já é “macaco velho” no online.`
     : '';

@@ -189,6 +189,8 @@ const mergeLeadData = (existing, incoming) => {
   merged.callbackDate = existing.callbackDate || incoming.callbackDate || null;
   merged.callbackTime = existing.callbackTime || incoming.callbackTime || null;
   merged.callbackRequestedBy = existing.callbackRequestedBy || incoming.callbackRequestedBy;
+  merged.callbackRequesterName = existing.callbackRequesterName || incoming.callbackRequesterName || '';
+  merged.callbackRequesterNameManual = existing.callbackRequesterNameManual ?? incoming.callbackRequesterNameManual ?? null;
   merged.meetingDate = existing.meetingDate || incoming.meetingDate || null;
   merged.meetingTime = existing.meetingTime || incoming.meetingTime || null;
   merged.meetingType = existing.meetingType || incoming.meetingType;

@@ -5,9 +5,10 @@ import { leadService } from './services/leadService';
 import { supabase, supabaseInitError } from './supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import { DashboardStats } from './components/DashboardStats';
-import { Plus, Search, Filter, Phone, CheckCircle, Clock, MapPin, Globe, Instagram, Facebook, Users, HelpCircle, Link as LinkIcon, Trash2, AlertTriangle, ChevronRight, ChevronUp, LogOut, Loader2, RefreshCcw, Wifi, WifiOff, CloudCheck, Building2, User as UserIcon, Briefcase, Upload, Download, Layers } from 'lucide-react';
+import { Plus, Search, Filter, Phone, CheckCircle, Clock, MapPin, Globe, Instagram, Facebook, Users, HelpCircle, Link as LinkIcon, Trash2, AlertTriangle, ChevronRight, ChevronUp, LogOut, Loader2, RefreshCcw, Wifi, WifiOff, CloudCheck, Building2, User as UserIcon, Briefcase, Upload, Download, Layers, Zap } from 'lucide-react';
 import { WhatsAppIcon } from './components/WhatsAppIcon';
 import { ALLOWED_EMAILS, AUTH_ERROR_KEY, RESET_FLOW_KEY } from './authConfig';
+import BlitzMode from './components/BlitzMode';
 
 const LeadModal = React.lazy(() => import('./components/LeadModal'));
 const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
@@ -20,6 +21,9 @@ const ConfirmationModal = React.lazy(() =>
 const DEFAULT_PAGE_SIZE = 10;
 const PAGE_SIZE_OPTIONS = [10, 20, 30];
 const PAGE_SIZE_STORAGE_KEY = 'coldflow_page_size';
+const DEFAULT_QUEUE_PAGE_SIZE = 5;
+const QUEUE_PAGE_SIZE_OPTIONS = [5, 10, 15, 20];
+const QUEUE_PAGE_SIZE_STORAGE_KEY = 'coldflow_queue_page_size';
 const STATUS_TABS = [
   LeadStatus.NOVO,
   LeadStatus.DECISOR_NAO_ATENDEU,
@@ -32,6 +36,15 @@ const STATUS_TABS = [
   LeadStatus.NAO_TENTAR_MAIS
 ];
 const NEXT_CONTACT_STATUS = 'Próximo contato';
+type BlitzCategory = 'new' | 'followup';
+const BLITZ_FOLLOWUP_KIND_SET = new Set<NonNullable<QueueItem['kind']>>([
+  'callback',
+  'proposal',
+  'interested',
+  'followup',
+  'try30'
+]);
+const AUTH_INIT_TIMEOUT_MS = 9000;
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -53,12 +66,19 @@ export default function App() {
   const [segmentQuery, setSegmentQuery] = useState('');
   const [queueView, setQueueView] = useState<'slider' | 'list'>('slider');
   const [queueIndex, setQueueIndex] = useState(0);
+  const [queueCurrentPage, setQueueCurrentPage] = useState(1);
+  const [queuePageSize, setQueuePageSize] = useState(() => {
+    const stored = localStorage.getItem(QUEUE_PAGE_SIZE_STORAGE_KEY);
+    const parsed = stored ? Number(stored) : DEFAULT_QUEUE_PAGE_SIZE;
+    return QUEUE_PAGE_SIZE_OPTIONS.includes(parsed) ? parsed : DEFAULT_QUEUE_PAGE_SIZE;
+  });
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(() => {
     const stored = localStorage.getItem(PAGE_SIZE_STORAGE_KEY);
     const parsed = stored ? Number(stored) : DEFAULT_PAGE_SIZE;
     return PAGE_SIZE_OPTIONS.includes(parsed) ? parsed : DEFAULT_PAGE_SIZE;
   });
+  const [blitzCategory, setBlitzCategory] = useState<BlitzCategory>('new');
   const queueSliderRef = useRef<HTMLDivElement | null>(null);
   const segmentDropdownRef = useRef<HTMLDivElement | null>(null);
   const segmentSearchRef = useRef<HTMLInputElement | null>(null);
@@ -69,6 +89,8 @@ export default function App() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isDedupeModalOpen, setIsDedupeModalOpen] = useState(false);
+  const [isBlitzMode, setIsBlitzMode] = useState(false);
+  const [blitzQueue, setBlitzQueue] = useState<Lead[]>([]);
   const [dedupePreview, setDedupePreview] = useState<{ groups: number; duplicates: number; total: number } | null>(null);
   const [isDedupeRunning, setIsDedupeRunning] = useState(false);
   const [toast, setToast] = useState<{ message: string; type?: 'success' | 'info' | 'error' } | null>(null);
@@ -83,9 +105,18 @@ export default function App() {
       return;
     }
     let isMounted = true;
+    let authTimeout: number | null = window.setTimeout(() => {
+      if (!isMounted) return;
+      console.warn('ColdFlow: auth init timeout, fallback to login screen.');
+      setAuthLoading(false);
+    }, AUTH_INIT_TIMEOUT_MS);
 
     const handleSession = (sessionUser: User | null) => {
       if (!isMounted) return;
+      if (authTimeout) {
+        window.clearTimeout(authTimeout);
+        authTimeout = null;
+      }
       const email = sessionUser?.email ?? '';
       if (sessionUser && !ALLOWED_EMAILS.includes(email)) {
         localStorage.setItem(AUTH_ERROR_KEY, 'Acesso restrito. Este e-mail não tem permissão para acessar o ColdFlow.');
@@ -98,9 +129,21 @@ export default function App() {
       setAuthLoading(false);
     };
 
-    supabase.auth.getSession().then(({ data }) => {
-      handleSession(data.session?.user ?? null);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        handleSession(data.session?.user ?? null);
+      })
+      .catch((error) => {
+        console.error('ColdFlow: failed to load auth session.', error);
+        if (!isMounted) return;
+        if (authTimeout) {
+          window.clearTimeout(authTimeout);
+          authTimeout = null;
+        }
+        setUser(null);
+        setAuthLoading(false);
+      });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') {
@@ -112,6 +155,9 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      if (authTimeout) {
+        window.clearTimeout(authTimeout);
+      }
       authListener.subscription.unsubscribe();
     };
   }, []);
@@ -160,10 +206,31 @@ export default function App() {
     };
   }, []);
   
-  const handleSaveLead = async (updatedLead: Lead) => {
+  const handleSaveLead = async (
+    updatedLead: Lead,
+    options?: { closeModal?: boolean }
+  ) => {
     await leadService.saveLead(updatedLead);
-    setSelectedLead(null);
+    if (options?.closeModal !== false) {
+      setSelectedLead(null);
+    }
   };
+
+  useEffect(() => {
+    if (!selectedLead) return;
+    const updatedLead = leads.find((lead) => lead.id === selectedLead.id);
+    if (!updatedLead) {
+      setSelectedLead(null);
+      return;
+    }
+    if (
+      updatedLead.updatedAt !== selectedLead.updatedAt ||
+      updatedLead.deletedAt !== selectedLead.deletedAt
+    ) {
+      setSelectedLead(updatedLead);
+    }
+  }, [leads, selectedLead]);
+
 
   const confirmDelete = async () => {
     if (leadToDelete) {
@@ -206,6 +273,7 @@ export default function App() {
       callbackDate: null,
       callbackTime: null,
       callbackRequestedBy: '',
+      callbackRequesterName: '',
       meetingDate: null,
       meetingTime: null,
       meetingType: '',
@@ -252,20 +320,69 @@ export default function App() {
     return counts;
   }, [queue]);
 
+  const queueTotalPages = useMemo(() => (
+    Math.max(1, Math.ceil(queue.length / queuePageSize))
+  ), [queue.length, queuePageSize]);
+
+  const paginatedQueue = useMemo(() => {
+    const start = (queueCurrentPage - 1) * queuePageSize;
+    return queue.slice(start, start + queuePageSize);
+  }, [queue, queueCurrentPage, queuePageSize]);
+
+  const queuePageStart = queue.length === 0 ? 0 : (queueCurrentPage - 1) * queuePageSize + 1;
+  const queuePageEnd = Math.min(queue.length, queueCurrentPage * queuePageSize);
+
+  useEffect(() => {
+    setQueueCurrentPage(1);
+  }, [queuePageSize]);
+
+  useEffect(() => {
+    if (queue.length === 0 && queueCurrentPage !== 1) {
+      setQueueCurrentPage(1);
+      return;
+    }
+    if (queueCurrentPage > queueTotalPages) {
+      setQueueCurrentPage(queueTotalPages);
+    }
+  }, [queueCurrentPage, queueTotalPages, queue.length]);
+
   const deferredFilter = useDeferredValue(filter);
   const deferredSegmentQuery = useDeferredValue(segmentQuery);
 
+  const hasScheduledNextContact = (lead: Lead) => Boolean(
+    lead.nextAttemptDate || lead.callbackDate || lead.meetingDate
+  );
+
   const needsNextContact = (lead: Lead) => {
     if (lead.status === LeadStatus.NAO_TENTAR_MAIS) return false;
-    if (lead.nextAttemptDate) return true;
+    if (hasScheduledNextContact(lead)) return true;
     return getNextContactLevel(lead) !== 'none';
   };
 
-  const hasScheduledNextContact = (lead: Lead) => Boolean(lead.nextAttemptDate);
+  const isBlitzEligible = (lead: Lead) =>
+    lead.status === LeadStatus.NOVO && !hasScheduledNextContact(lead);
+
+  const isBlitzFollowUpEligible = (lead: Lead) => {
+    const status = getQueueStatus(lead);
+    return Boolean(status?.kind && BLITZ_FOLLOWUP_KIND_SET.has(status.kind));
+  };
+
+  useEffect(() => {
+    if (!isBlitzMode) return;
+    setBlitzQueue((prev) => {
+      if (prev.length === 0) return prev;
+      const leadMap = new Map(leads.map((lead) => [lead.id, lead]));
+      const isEligible = (lead: Lead) =>
+        blitzCategory === 'new' ? isBlitzEligible(lead) : isBlitzFollowUpEligible(lead);
+      return prev
+        .map((lead) => leadMap.get(lead.id))
+        .filter((lead): lead is Lead => !!lead && isEligible(lead));
+    });
+  }, [leads, isBlitzMode, blitzCategory]);
 
   const getNextContactBadgeInfo = (lead: Lead) => {
     if (lead.status === LeadStatus.NAO_TENTAR_MAIS) return null;
-    if (lead.nextAttemptDate) {
+    if (hasScheduledNextContact(lead)) {
       return {
         label: 'Próximo contato agendado',
         className: 'border-sky-200 bg-sky-50 text-sky-700'
@@ -415,6 +532,7 @@ export default function App() {
       lead.lastContactPerson,
       lead.nextAttemptChannel,
       lead.callbackRequestedBy,
+      lead.callbackRequesterName,
       lead.meetingType,
       lead.callbackDate,
       lead.callbackTime,
@@ -496,6 +614,37 @@ export default function App() {
     return scored.map((item) => item.lead);
   }, [leads, deferredFilter, selectedSegments, selectedStatus]);
 
+  const filteredLeadIds = useMemo(() => (
+    new Set(filteredLeads.map((lead) => lead.id))
+  ), [filteredLeads]);
+
+  const blitzFollowUpQueue = useMemo(() => (
+    queue
+      .filter(({ status, lead }) => status?.kind && BLITZ_FOLLOWUP_KIND_SET.has(status.kind) && filteredLeadIds.has(lead.id))
+      .map(({ lead }) => lead)
+  ), [queue, filteredLeadIds]);
+
+  const blitzQueues = useMemo<Record<BlitzCategory, Lead[]>>(() => ({
+    new: filteredLeads.filter(isBlitzEligible),
+    followup: blitzFollowUpQueue
+  }), [filteredLeads, blitzFollowUpQueue]);
+
+  const blitzCategoryCounts = useMemo(() => ({
+    new: blitzQueues.new.length,
+    followup: blitzQueues.followup.length
+  }), [blitzQueues]);
+
+  const openBlitzMode = (category: BlitzCategory) => {
+    setBlitzCategory(category);
+    setBlitzQueue(blitzQueues[category]);
+    setIsBlitzMode(true);
+  };
+
+  const handleBlitzCategoryChange = (category: BlitzCategory) => {
+    setBlitzCategory(category);
+    setBlitzQueue(blitzQueues[category]);
+  };
+
   const totalPages = useMemo(() => (
     Math.max(1, Math.ceil(filteredLeads.length / pageSize))
   ), [filteredLeads.length, pageSize]);
@@ -531,6 +680,14 @@ export default function App() {
     });
     return counts;
   }, [leads]);
+
+  const topSegments = useMemo(() => {
+    return Array.from(segmentCounts.entries())
+      .filter(([segment]) => segment)
+      .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+      .slice(0, 5)
+      .map(([segment]) => segment);
+  }, [segmentCounts]);
 
   const statusBaseLeads = useMemo(() => {
     const lowerFilter = deferredFilter.toLowerCase();
@@ -688,7 +845,7 @@ export default function App() {
     if (queueSliderRef.current) {
       queueSliderRef.current.scrollLeft = 0;
     }
-  }, [queue.length, queueView]);
+  }, [paginatedQueue.length, queueView, queueCurrentPage]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -706,6 +863,7 @@ export default function App() {
   const handleQueueScroll = () => {
     const container = queueSliderRef.current;
     if (!container) return;
+    if (paginatedQueue.length === 0) return;
     const card = container.querySelector<HTMLElement>('[data-queue-card]');
     const cardWidth = card?.offsetWidth || container.clientWidth;
     if (!cardWidth) return;
@@ -713,7 +871,7 @@ export default function App() {
     const gap = parseFloat(styles.columnGap || styles.gap || '0');
     const step = cardWidth + gap;
     const nextIndex = Math.round(container.scrollLeft / step);
-    setQueueIndex(Math.max(0, Math.min(queue.length - 1, nextIndex)));
+    setQueueIndex(Math.max(0, Math.min(paginatedQueue.length - 1, nextIndex)));
   };
 
   const getOriginIconType = (origin: string) => {
@@ -1146,6 +1304,15 @@ export default function App() {
                <Plus size={18} /> <span className="hidden md:inline">Novo</span>
              </button>
 
+             <button
+               onClick={() => openBlitzMode('new')}
+               className="flex items-center gap-2 bg-gradient-to-r from-yellow-500 to-amber-600 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow-lg hover:shadow-yellow-500/20 active:scale-95 transition-all"
+               title="Processar fila com one-tap"
+             >
+               <Zap size={18} className="fill-white" />
+               <span className="hidden md:inline">Blitz</span>
+             </button>
+
              <button onClick={() => setIsLogoutModalOpen(true)} className="text-gray-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Sair" aria-label="Sair">
                <LogOut size={20} />
              </button>
@@ -1204,9 +1371,9 @@ export default function App() {
             {queue.length > 0 && queueView === 'slider' && (
               <div className="ml-auto flex items-center gap-2 text-[11px] md:hidden text-gray-500">
                 <span>Sequência</span>
-                <span className="font-semibold text-gray-700">{queueIndex + 1}/{queue.length}</span>
+                <span className="font-semibold text-gray-700">{paginatedQueue.length ? queueIndex + 1 : 0}/{paginatedQueue.length}</span>
                 <div className="hidden sm:flex items-center gap-1">
-                  {queue.map((_, idx) => (
+                  {paginatedQueue.map((_, idx) => (
                     <span key={`dot-${idx}`} className={`h-1.5 w-1.5 rounded-full ${idx === queueIndex ? 'bg-gray-800' : 'bg-gray-300'}`} />
                   ))}
                 </div>
@@ -1228,7 +1395,7 @@ export default function App() {
                       onScroll={handleQueueScroll}
                       className="flex gap-3 overflow-x-auto snap-x snap-mandatory scroll-smooth -mx-4 px-4 pb-2"
                     >
-                      {queue.map(({ lead, status }) => (
+                      {paginatedQueue.map(({ lead, status }) => (
                         <div key={lead.id} data-queue-card className="snap-center shrink-0 w-full">
                           {renderQueueCard(lead, status, 'slider')}
                         </div>
@@ -1238,7 +1405,7 @@ export default function App() {
                 ) : (
                   <div className="space-y-5">
                     <div className="grid grid-cols-1 gap-5">
-                      {queue.map(({ lead, status }) => (
+                      {paginatedQueue.map(({ lead, status }) => (
                         <div key={lead.id}>
                           {renderQueueCard(lead, status, 'list')}
                         </div>
@@ -1267,7 +1434,7 @@ export default function App() {
                     <div className="col-span-1 text-right">Entrada</div>
                   </div>
                   <div className="divide-y divide-gray-100">
-                    {queue.map(({ lead, status }) => (
+                    {paginatedQueue.map(({ lead, status }) => (
                       <div key={lead.id}>
                         {renderQueueRow(lead, status)}
                       </div>
@@ -1276,6 +1443,50 @@ export default function App() {
                 </div>
               </div>
             </>
+          )}
+
+          {queue.length > 0 && (
+            <div className="mt-4 border-t border-gray-200 bg-white/80 px-4 md:px-6 py-3 flex flex-col md:flex-row items-center justify-between gap-3 text-sm text-gray-600 rounded-b-xl">
+              <span>
+                Mostrando <strong className="text-gray-900">{queuePageStart}</strong>–<strong className="text-gray-900">{queuePageEnd}</strong> de{' '}
+                <strong className="text-gray-900">{queue.length}</strong>
+              </span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-500">Por página</span>
+                  <select
+                    value={queuePageSize}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setQueuePageSize(next);
+                      localStorage.setItem(QUEUE_PAGE_SIZE_STORAGE_KEY, String(next));
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-semibold text-gray-700 focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none"
+                  >
+                    {QUEUE_PAGE_SIZE_OPTIONS.map((size) => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={() => setQueueCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={queueCurrentPage === 1}
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 hover:text-gray-900 hover:border-gray-300 transition disabled:opacity-40"
+                >
+                  Anterior
+                </button>
+                <span className="text-xs font-semibold text-gray-500">
+                  Página <strong className="text-gray-900">{queueCurrentPage}</strong> de <strong className="text-gray-900">{queueTotalPages}</strong>
+                </span>
+                <button
+                  onClick={() => setQueueCurrentPage((prev) => Math.min(queueTotalPages, prev + 1))}
+                  disabled={queueCurrentPage === queueTotalPages}
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 hover:text-gray-900 hover:border-gray-300 transition disabled:opacity-40"
+                >
+                  Próxima
+                </button>
+              </div>
+            </div>
           )}
         </section>
 
@@ -1716,6 +1927,29 @@ export default function App() {
             leads={leads}
             availableSegments={availableSegments}
             segmentCounts={segmentCounts}
+          />
+        )}
+
+        {isBlitzMode && (
+          <BlitzMode
+            queue={blitzQueue}
+            topSegments={topSegments}
+            category={blitzCategory}
+            categoryCounts={blitzCategoryCounts}
+            onCategoryChange={handleBlitzCategoryChange}
+            onClose={() => {
+              setIsBlitzMode(false);
+              setBlitzQueue([]);
+            }}
+            onProcess={(id, updates) => {
+              const leadToUpdate = leads.find((lead) => lead.id === id);
+              if (leadToUpdate) {
+                handleSaveLead({ ...leadToUpdate, ...updates }, { closeModal: false });
+              }
+            }}
+            onDelete={(id) => {
+              leadService.deleteLead(id);
+            }}
           />
         )}
 

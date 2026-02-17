@@ -108,6 +108,21 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
     const numeric = getTicketNumericValue(initialLead.ticketPotential);
     return numeric ? String(numeric) : '';
   });
+
+  useEffect(() => {
+    const normalizedLead = {
+      ...initialLead,
+      siteState: normalizeSiteState(initialLead.siteState) || ''
+    };
+    setLead(normalizedLead);
+    setScriptMode(initialLead.customScript ? 'custom' : 'auto');
+    if (initialLead.customScript) {
+      setScript(initialLead.customScript);
+    } else {
+      setScript(generateDiagnosticScript(normalizedLead, 'full'));
+    }
+    setLastContactDraftTime('');
+  }, [initialLead.id, initialLead.updatedAt]);
   
   // Objection Pill State
   const [activePill, setActivePill] = useState<ScriptPill | null>(null);
@@ -245,7 +260,7 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
     setTicketSelection(isPreset ? initialLead.ticketPotential : '');
     const numeric = !isPreset ? getTicketNumericValue(initialLead.ticketPotential) : 0;
     setManualTicket(numeric ? String(numeric) : '');
-  }, [initialLead.id]);
+  }, [initialLead.id, initialLead.updatedAt]);
 
   useEffect(() => {
     if (!statusDropdownOpen) return;
@@ -371,6 +386,23 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
     setLastContactDraftTime(time);
   };
 
+  const handleMeetingDateChange = (value: string) => {
+    if (!value) {
+      setLead((prev) => ({
+        ...prev,
+        meetingDate: null,
+        meetingTime: null,
+        meetingType: ''
+      }));
+      return;
+    }
+    setLead((prev) => ({
+      ...prev,
+      meetingDate: value,
+      ...(prev.status !== LeadStatus.REUNIAO_MARCADA ? { status: LeadStatus.REUNIAO_MARCADA } : {})
+    }));
+  };
+
   const setLastContactNow = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -468,7 +500,13 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
   }
 
   const performClearCallback = () => {
-    setLead(prev => ({ ...prev, callbackDate: null, callbackTime: null, callbackRequestedBy: '' }));
+    setLead(prev => ({
+      ...prev,
+      callbackDate: null,
+      callbackTime: null,
+      callbackRequestedBy: '',
+      callbackRequesterName: ''
+    }));
   }
 
   const requestClearMeeting = (e: React.MouseEvent) => {
@@ -481,6 +519,18 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
     setLead(prev => ({ ...prev, meetingDate: null, meetingTime: null, meetingType: '' }));
   }
 
+  const applyContactDefaults = (prev: Lead) => {
+    const nowIso = new Date().toISOString();
+    const attempts = typeof prev.attempts === 'number' ? prev.attempts : 0;
+    return {
+      ...prev,
+      lastContactDate: nowIso,
+      lastContactPerson: prev.lastContactPerson || ContactPersonType.DECISOR,
+      channelLastAttempt: prev.channelLastAttempt || 'Ligação',
+      attempts: attempts + 1
+    };
+  };
+
   const handleConfirmAction = () => {
     if (confirmModal.type === 'callback') performClearCallback();
     if (confirmModal.type === 'meeting') performClearMeeting();
@@ -488,11 +538,34 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
   }
 
   const initCallback = () => {
-    setLead(prev => ({ ...prev, callbackDate: getLocalDateKey(), callbackTime: '10:00', callbackRequestedBy: ContactPersonType.DECISOR }));
+    setLead((prev) => {
+      const defaultName =
+        prev.callbackRequesterName ||
+        prev.decisors?.[0]?.name ||
+        prev.attendants?.[0]?.name ||
+        '';
+      const next = {
+        ...prev,
+        callbackDate: getLocalDateKey(),
+        callbackTime: '10:00',
+        callbackRequestedBy: ContactPersonType.DECISOR,
+        callbackRequesterName: defaultName
+      };
+      return applyContactDefaults(next);
+    });
   }
 
   const initMeeting = () => {
-    setLead(prev => ({ ...prev, meetingDate: getLocalDateKey(), meetingTime: '15:00', meetingType: 'Primeira Reunião' }));
+    setLead((prev) => {
+      const next = {
+        ...prev,
+        meetingDate: getLocalDateKey(),
+        meetingTime: '15:00',
+        meetingType: 'Primeira Reunião',
+        status: LeadStatus.REUNIAO_MARCADA
+      };
+      return applyContactDefaults(next);
+    });
   }
 
   const copyScript = () => {
@@ -508,9 +581,13 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
     lead.meetingTime
   );
 
+  const callbackRequesterLabel = [lead.callbackRequestedBy, lead.callbackRequesterName]
+    .filter(Boolean)
+    .join(' - ');
+
   const callbackLink = getGoogleCalendarLink(
     `Ligar: ${lead.companyName}`, 
-    `Retorno combinado com ${lead.callbackRequestedBy} (${mainDecisor.name}).\nTel: ${mainDecisor.phone}`, 
+    `Retorno combinado com ${callbackRequesterLabel || 'contato'} (${mainDecisor.name}).\nTel: ${mainDecisor.phone}`, 
     lead.callbackDate, 
     lead.callbackTime
   );
@@ -961,11 +1038,13 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
                                 value={lead.nextAttemptDate || ''} 
                                 onChange={(e) => {
                                   const value = e.target.value;
-                                  handleChange('nextAttemptDate', value);
                                   if (!value) {
+                                    handleChange('nextAttemptDate', null);
                                     handleChange('nextAttemptTime', null);
                                     handleChange('nextAttemptChannel', '');
+                                    return;
                                   }
+                                  handleChange('nextAttemptDate', value);
                                 }} 
                                 className={`${inputClass} date-input pl-10 cursor-pointer`} 
                                 style={{ colorScheme: 'light' }}
@@ -1078,7 +1157,7 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
                  </div>
 
                  {/* AGENDA - RETORNO */}
-                 {lead.callbackDate !== null ? (
+                 {lead.callbackDate ? (
                    <div className="bg-yellow-50 p-5 rounded-lg border border-yellow-200 shadow-sm relative group animate-in zoom-in-95 duration-200">
                       <button type="button" onClick={requestClearCallback} className="absolute top-3 right-3 text-yellow-600 hover:text-red-600 transition-colors p-1 cursor-pointer z-10" title="Remover agendamento"><Trash2 size={16} /></button>
                       <h4 className="text-yellow-800 font-bold text-sm mb-4 uppercase tracking-wide flex items-center gap-2"><Calendar size={14} /> Retorno Agendado</h4>
@@ -1089,13 +1168,31 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
                                <option value="">Selecione...</option><option value={ContactPersonType.EMPRESA}>{ContactPersonType.EMPRESA}</option><option value={ContactPersonType.DECISOR}>{ContactPersonType.DECISOR}</option>
                             </select>
                          </div>
+                         <div>
+                           <label className="text-[10px] uppercase font-bold text-yellow-700">Nome (quem pediu)</label>
+                           <input
+                             type="text"
+                             value={lead.callbackRequesterName || ''}
+                             onChange={(e) => handleChange('callbackRequesterName', e.target.value)}
+                             className="w-full p-2 bg-white border border-yellow-300 rounded-md text-sm text-gray-800"
+                             placeholder="Ex: Carla / Dr. Jose"
+                           />
+                         </div>
                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             <div className="relative">
                               <Calendar className="absolute left-2.5 top-1/2 -translate-y-1/2 text-yellow-600 pointer-events-none" size={16} />
                               <input 
                                 type="date" 
                                 value={lead.callbackDate || ''} 
-                                onChange={(e) => handleChange('callbackDate', e.target.value)} 
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  if (!value) {
+                                    handleChange('callbackDate', null);
+                                    handleChange('callbackTime', null);
+                                    return;
+                                  }
+                                  handleChange('callbackDate', value);
+                                }} 
                                 className="w-full p-2 pl-9 bg-white border border-yellow-300 rounded-md text-sm text-gray-800 cursor-pointer date-input"
                                 style={{ colorScheme: 'light' }}
                               />
@@ -1115,7 +1212,7 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
                  )}
 
                  {/* AGENDA - REUNIÃO */}
-                 {lead.meetingDate !== null ? (
+                 {lead.meetingDate ? (
                    <div className="bg-emerald-50 p-5 rounded-lg border border-emerald-200 shadow-sm relative animate-in zoom-in-95 duration-200">
                       <button type="button" onClick={requestClearMeeting} className="absolute top-3 right-3 text-emerald-600 hover:text-red-600 transition-colors p-1 cursor-pointer z-10" title="Remover agendamento"><Trash2 size={16} /></button>
                       <h4 className="text-emerald-800 font-bold text-sm mb-4 uppercase tracking-wide flex items-center gap-2"><Calendar size={14} /> Reunião Agendada</h4>
@@ -1129,7 +1226,7 @@ const LeadModal: React.FC<Props> = ({ lead: initialLead, onClose, onSave, onRequ
                               <input 
                                 type="date" 
                                 value={lead.meetingDate || ''} 
-                                onChange={(e) => handleChange('meetingDate', e.target.value)} 
+                                onChange={(e) => handleMeetingDateChange(e.target.value)} 
                                 className="w-full p-2 pl-9 bg-white border border-emerald-300 rounded-md text-sm text-gray-800 cursor-pointer date-input"
                                 style={{ colorScheme: 'light' }}
                               />

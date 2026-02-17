@@ -1,530 +1,495 @@
-# ColdFlow CRM — Checkpoint (Ultra específico)
+# ColdFlow CRM — CHECKPOINT / Auditoria Técnica
 
-Este documento é um checkpoint completo para manutenção, instalação e continuidade do projeto por qualquer pessoa/IA.
-
----
-
-## 1) Resumo do que o app faz
-
-ColdFlow é um CRM focado em **leads frios** com fluxo contínuo:
-- **Fila diária inteligente** (priorização por data/status/valor).
-- **Cadastro e edição detalhada** do lead (contatos, origem, segmentação, diagnóstico do site).
-- **Importação em massa** (CSV/XLSX) com reconhecimento automático de **origem**, **segmento**, **nota** e **links**.
-- **Exportação** (CSV/XLSX) com seleção de segmentos.
-- **Sync automático** com Supabase + modo offline/local.
-- **Deduplicação** de leads e contatos (merge seguro + botão no app).
-- **Dashboard financeiro** com histórico, barras, visão compacta e sugestões inteligentes (helper).
-- **Links rápidos** por lead (Maps / Site / WhatsApp).
+Data da auditoria: **17/02/2026**
+Workspace: `/Users/belegante/Downloads/coldflow-crm 20.34.08`
 
 ---
 
-## 2) Stack e arquitetura
+## 1) Resumo Executivo
+
+ColdFlow CRM é um CRM operacional para leads frios com foco em:
+- priorização diária de contatos (fila inteligente);
+- execução rápida de cadência comercial (modo normal + Blitz);
+- controle de status, agenda, histórico de tentativas e financeiro;
+- importação/exportação em lote (CSV/XLSX);
+- sincronização offline-first com Supabase (Postgres + Auth + RLS);
+- deduplicação local e server-side.
+
+A aplicação é **SPA React + Vite** com backend em **Supabase**. Não há API Node/Express própria no repositório.
+
+---
+
+## 2) Escopo Auditado (código lido)
+
+### Núcleo
+- `App.tsx`
+- `types.ts`
+- `utils.ts`
+- `services/leadService.ts`
+- `supabaseClient.ts`
+
+### UI/Fluxo
+- `components/LoginScreen.tsx`
+- `components/DashboardStats.tsx`
+- `components/LeadModal.tsx`
+- `components/BlitzMode.tsx`
+- `components/ImportLeadsModal.tsx`
+- `components/ExportLeadsModal.tsx`
+- `components/ConfirmationModal.tsx`
+- `components/WhatsAppIcon.tsx`
+
+### Dados/Infra
+- `supabase/schema.sql`
+- `scripts/dedupe-leads-once.mjs`
+- `utils/importLeads.ts`
+- `utils/exportLeads.ts`
+- `vite.config.ts`
+- `tailwind.config.cjs`
+- `index.css`, `index.tsx`, `index.html`
+- `authConfig.ts`
+
+---
+
+## 3) Estado Atual da Auditoria (build/check)
+
+### Build de produção
+Comando executado em **17/02/2026**:
+```bash
+npm run build
+```
+Resultado: **sucesso** (bundle gerado em `dist/`).
+
+### Type-check TypeScript
+Comando executado em **17/02/2026**:
+```bash
+npx tsc --noEmit
+```
+Resultado: **falha** com erros de tipagem (detalhes na seção 13 - Achados Técnicos).
+
+---
+
+## 4) Arquitetura Geral
 
 ### Frontend
-- React + Vite + TypeScript
+- React 19 + TypeScript
+- Vite 6
 - TailwindCSS
 - Lucide icons
+- Lazy loading de telas/modais (Login, LeadModal, Import, Export, Confirmation)
 
 ### Backend
-- **Supabase** (Postgres + Auth + RLS)
-- Banco principal: `public.leads` (payload JSONB)
-- Histórico: `stats_daily`, `lead_events`, `tracker_daily`
-- RPC: `apply_lead_merge` (dedupe server‑side)
+- Supabase (Auth + Postgres)
+- Tabelas principais:
+  - `public.leads`
+  - `public.stats_daily`
+  - `public.lead_events`
+  - `public.tracker_daily`
+- RPC de dedupe:
+  - `public.apply_lead_merge(primary_id, merged_payload, duplicate_ids)`
+
+### Estratégia de dados
+- Modelo **offline-first**:
+  - estado principal local em `localStorage`;
+  - fila de sincronização para operações de SAVE/DELETE;
+  - sincronização incremental + full sync diário;
+  - merge por `updatedAt` (last write wins com guardas).
 
 ---
 
-## 3) Estrutura de pastas (principais)
+## 5) Autenticação e Acesso
 
-- `App.tsx`
-  Tela principal (login, navbar, fila, lista, filtros, modais, toast).
+Arquivo-chave: `authConfig.ts`
 
-- `components/DashboardStats.tsx`
-  Dashboard com histórico, filtros por período, barras e sugestões.
+- Allowlist hardcoded:
+  - `brunokalebe@gmail.com`
+  - `bruno@belegante.co`
+- Login via Google OAuth e e-mail/senha (`LoginScreen.tsx`)
+- Fluxo completo de recuperação de senha:
+  - valida link de recovery;
+  - troca `code` por sessão quando necessário;
+  - bloqueia acesso fora da allowlist;
+  - persiste estado de reset via `RESET_FLOW_KEY`.
 
-- `components/LoginScreen.tsx`
-  Login Google + Email/Senha + fluxo “Esqueci minha senha”.
-
-- `authConfig.ts`
-  Allowlist compartilhada e flags do fluxo de reset.
-
-- `components/LeadModal.tsx`
-  Modal completo de edição do lead.
-
-- `components/ImportLeadsModal.tsx`
-  Upload CSV/XLSX + preview + regras de importação.
-
-- `components/ExportLeadsModal.tsx`
-  Exportação CSV/XLSX com seleção de segmentos.
-
-- `components/WhatsAppIcon.tsx`
-  Ícone custom do WhatsApp usado nos botões rápidos.
-
-- `services/leadService.ts`
-  **Coração do sync** (local storage + fila + Supabase) + dedupe.
-
-- `utils/importLeads.ts`
-  **Lógica de importação** (mapa de colunas, origem, segmento, avaliação).
-
-- `utils/exportLeads.ts`
-  **Lógica de exportação** (CSV/XLSX + headers padrão).
-
-- `scripts/dedupe-leads-once.mjs`
-  Script de dedupe server‑side (service role) para rodar 1 vez.
-
-- `supabase/schema.sql`
-  Schema, políticas RLS, tabelas de histórico e RPC.
-
-- `.env.example`
-  Variáveis de ambiente para Supabase.
+`App.tsx` força retorno ao login quando:
+- sem usuário autenticado;
+- fluxo de reset ativo.
 
 ---
 
-## 4) Auth (Supabase)
-
-### Variáveis obrigatórias
-Crie `.env.local` com:
-```
-VITE_SUPABASE_URL=...
-VITE_SUPABASE_ANON_KEY=...
-```
-
-### OAuth Google
-No Supabase:
-1) **Auth → Providers → Google**: habilitar.
-2) No Google Cloud: adicionar callback  
-   `https://<PROJECT>.supabase.co/auth/v1/callback`
-3) **Auth → URL Configuration**
-   - Site URL: `https://seu-dominio.com`
-   - Redirect URLs: adicione domínio prod + `http://localhost:3000`
-
-### Allowlist por e‑mail
-Definido em:
-- `authConfig.ts` (front)
-- `supabase/schema.sql` (RLS)
-- `services/leadService.ts` aplica o mesmo allowlist no sync remoto
-
-E‑mails atuais:
-- `brunokalebe@gmail.com`
-- `bruno@belegante.co`
-
-**IMPORTANTE:** nunca usar `sb_secret` no front‑end.
-
-### Recuperação de senha
-- Tela de login tem “Esqueci minha senha”.
-- Link de reset é validado (expiração/estado) e o fluxo persiste após refresh.
-- Se o link for inválido/expirado, o app mostra aviso e retorna ao login.
-- Após redefinir, o usuário é deslogado e precisa entrar novamente.
-
----
-
-## 5) Banco / Schema (Supabase)
-
-Arquivo: `supabase/schema.sql`
-
-### Extensão
-```
-create extension if not exists pgcrypto;
-```
-
-### Tabela principal
-```
-public.leads
-  id          text (pk)
-  updated_at  bigint
-  deleted_at  bigint (soft delete)
-  payload     jsonb (dados completos do lead)
-  created_at  timestamptz default now()
-```
-
-### Histórico do dashboard
-```
-public.stats_daily
-  day                    date (pk)
-  total_pipeline         double precision
-  forecast_hot           double precision
-  revenue_realized       double precision
-  paid_entry             double precision
-  paid_full              double precision
-  total_ticket_value     double precision
-  total_ticket_count     int
-  total_leads            int
-  hot_leads              int
-  decisor_frio           int
-  propostas_enviadas     int
-  reunioes_agendadas     int
-  pagamentos_feitos      int
-  updated_at             timestamptz default now()
-```
-
-### Eventos (ações)
-```
-public.lead_events
-  id           uuid (pk)
-  lead_id      text
-  event_type   text
-  occurred_at  timestamptz
-  old_status   text
-  new_status   text
-  meta         jsonb
-  created_at   timestamptz
-```
-
-### Tracker diário (sugestões)
-```
-public.tracker_daily
-  day                   date (pk)
-  contacts_count        int
-  callbacks_count       int
-  meetings_count        int
-  proposals_count       int
-  payments_count        int
-  next_contacts_count   int
-  best_contact_hour     int
-  best_contact_count    double precision
-  avg_followup_gap_days double precision
-  followup_gap_samples  int
-  updated_at            timestamptz
-```
-
-### RPC (dedupe server‑side)
-```
-public.apply_lead_merge(primary_id, merged_payload, duplicate_ids)
-```
-
-### RLS
-Todas as tabelas estão com RLS e allowlist por e‑mail.
-
----
-
-## 6) Modelo de dados (Lead)
+## 6) Modelo de Dados do Lead
 
 Arquivo: `types.ts`
 
-Campos principais:
-- `id`, `updatedAt`, `deletedAt`
-- `companyName`
-- `decisors[]`, `attendants[]`
-- `origin`, `originLink`, `originRating`
-- `segment`
-- `siteUrl`, `siteState`, `sitePainPoints`
-- `status`, `attempts`
-- `lastContactDate` (ISO com data+hora), `lastContactPerson`, `channelLastAttempt`
-- `nextAttemptDate`, `nextAttemptTime`, `nextAttemptChannel`
-- `callbackDate`, `callbackTime`, `callbackRequestedBy`
-- `meetingDate`, `meetingTime`, `meetingType`
-- `ticketPotential`, `paidValueType`, `paidValueCustom`
-- `needsNextContactOverride` (alerta manual)
+### Estrutura principal
+- Identidade/sync: `id`, `updatedAt`, `deletedAt`, `_needsSync`
+- Empresa/contexto: `companyName`, `segment`, `yearsInBusiness`
+- Contatos: `decisors[]`, `attendants[]`
+- Origem: `origin`, `originLink`, `originRating`, `references[]`
+- Diagnóstico: `siteUrl`, `siteState`, `sitePainPoints[]`
+- Operação: `attempts`, `lastContactDate`, `lastContactPerson`, `channelLastAttempt`, `resultLastAttempt`
+- Agendas:
+  - `nextAttemptDate/time/channel`
+  - `callbackDate/time/requestedBy/requesterName`
+  - `meetingDate/time/type`
+- Comercial: `ticketPotential`, `paidValueType`, `paidValueCustom`
+- Estratégia: `status`, `discardReason`, `notes`, `customScript`
+- Alerta operacional: `needsNextContactOverride`
 
-**Soft delete:**
-- Lead removido recebe `deletedAt`.
-- UI oculta leads deletados.
-
-**SiteState (normalizado):**
-- Não tem site
-- Site quebrado
-- Site feio/amador
-- Site ok
-- Site bonito
+### Soft delete
+- Remoção lógica por `deletedAt`;
+- UI só exibe leads ativos;
+- no sync remoto, delete = `UPDATE deleted_at`.
 
 ---
 
-## 7) Sync / Offline (LeadService)
+## 7) Funcionalidades Frontend (o que o app faz)
 
+## 7.1 Dashboard (topo)
+Arquivo: `components/DashboardStats.tsx`
+
+- KPI financeiro (pipeline, alta chance, fechados, recebido, sinal)
+- Faixas de período:
+  - hoje, 7 dias, 30 dias, tudo
+- Modo compacto/expandido
+- Barras de comparação com escala dinâmica
+- Indicadores auxiliares:
+  - ticket médio
+  - taxa de alta chance
+  - decisor frio
+  - reuniões agendadas
+  - pagamentos
+
+### Persistência histórica automática
+- `stats_daily`: snapshot de métricas (throttle local 10 min)
+- `tracker_daily`: snapshot de indicadores de cadência
+- `lead_events`: leitura paginada para contagens por período
+
+### Sugestões inteligentes
+Baseadas em eventos + peso temporal (half-life ~21 dias):
+- melhor horário de contato;
+- cadência média sugerida;
+- taxa de avanço para reunião;
+- volume de próximos contatos definidos.
+
+---
+
+## 7.2 Fila de Hoje
+Arquivos: `App.tsx`, `utils.ts`
+
+- Monta fila com `getQueueStatus(lead)` + `calculatePriorityScore(lead)`
+- Critérios principais da fila:
+  1. reunião vencida/hoje
+  2. retorno vencido/hoje
+  3. proposta enviada com follow-up vencido/hoje
+  4. decisor interessado vencido/hoje
+  5. follow-up geral vencido/hoje
+  6. tentar em 30 quando vencer
+- Ordenação:
+  - `sortOrder` de negócio;
+  - horário (quando houver);
+  - score de prioridade.
+- Exibição em:
+  - slider mobile;
+  - grade/tabela desktop.
+
+---
+
+## 7.3 Lista de Leads + filtros
+Arquivo: `App.tsx`
+
+- Busca global textual e por dígitos (telefone)
+- Filtro multi-segmento com busca
+- Filtro por status com pills e contagem
+- Status especial: **Próximo contato**
+  - considera agendados e pendentes
+  - exclui `Não tentar mais`
+- Paginação persistida em localStorage
+- Tabela desktop + cards mobile
+- Ações rápidas por linha:
+  - origem (Maps/link)
+  - site
+  - WhatsApp com mensagem contextual
+
+---
+
+## 7.4 Modal do Lead (edição completa)
+Arquivo: `components/LeadModal.tsx`
+
+### Aba Operacional
+- identificação da empresa
+- segmento e tempo de mercado
+- origem, link, avaliação, referências
+- diagnóstico do site (estado + dor/pain points)
+- gestão de contatos (decisor/atendente)
+- registro de atividade:
+  - tentativas
+  - último contato (data/hora)
+  - canal
+  - observações
+- pipeline:
+  - status completo
+  - próxima tentativa (data/hora/canal)
+  - descarte com motivo (quando `Não tentar mais`)
+- financeiro:
+  - ticket preset ou manual
+  - cálculo automático de entrada (40%)
+  - valor pago (inteiro/sinal/outro)
+- agenda:
+  - retorno agendado
+  - reunião agendada
+  - links para Google Calendar
+
+### Aba Script & Diagnóstico
+- script gerado automático (`generateDiagnosticScript`)
+- alternância Auto/Manual
+- modo micro/full
+- biblioteca de pílulas de objeção/contorno
+- modo tela cheia para script
+
+---
+
+## 7.5 Blitz Mode (execução rápida)
+Arquivo: `components/BlitzMode.tsx`
+
+- Modo operacional full-screen para processar fila rapidamente
+- Categorias:
+  - `new` (leads novos sem próximo contato)
+  - `followup` (itens de follow-up do dia)
+- Ações de fluxo por etapa:
+  - conexão (GK/caixa postal/falamos)
+  - resultado da conversa
+  - refinamento por motivo de não interesse
+  - agendamento rápido de retorno/reunião
+- Atualização inline de diagnóstico (site state + pain points + anos)
+- Script contextual micro/full
+- Recursos de produtividade:
+  - randomização de ordem
+  - salto por segmento
+  - marcação rápida de email/whatsapp enviado
+  - exclusão rápida de lead
+
+---
+
+## 7.6 Importação de Leads
+Arquivos: `components/ImportLeadsModal.tsx`, `utils/importLeads.ts`
+
+- Entrada: `.csv`, `.xlsx`, `.xls`
+- Detecção de headers por aliases
+- Inferência de origem:
+  - por link (maps/instagram/facebook/whatsapp/site)
+  - por texto da coluna origem
+- Override manual de origem (inclui "Outro" com label)
+- Inferência de segmento por dicionário de palavras-chave
+- Preview, warnings e contagem de ignorados
+- Import em lote via `leadService.saveLeadsBatch` (com merge dedupe)
+
+---
+
+## 7.7 Exportação de Leads
+Arquivos: `components/ExportLeadsModal.tsx`, `utils/exportLeads.ts`
+
+- Saída: CSV/XLSX
+- Escopo:
+  - todos os leads
+  - segmentos selecionados
+- Colunas exportadas padronizadas (empresa, origem, status, ticket, tentativas etc.)
+
+---
+
+## 8) Regras de Negócio (núcleo)
+
+### 8.1 Score de prioridade
+Arquivo: `utils.ts` (`calculatePriorityScore`)
+
+Score composto por:
+- faixa de ticket;
+- status atual;
+- proximidade de reunião/retorno;
+- peso de quem pediu retorno;
+- presença de decisor nomeado;
+- qualidade do site;
+- quantidade de dores;
+- combinações estratégicas (ex.: alto ticket + sem site + reagendamento).
+
+### 8.2 Próximo contato pendente
+Arquivo: `utils.ts` (`getNextContactLevel`)
+
+- `none | light | strong`
+- considera:
+  - último contato;
+  - existência de agenda já marcada;
+  - status avançados que não devem alertar;
+  - janela de até 7 dias;
+  - score por tentativas + peso de status;
+  - override manual (`needsNextContactOverride`).
+
+### 8.3 Deduplicação
+Arquivos: `services/leadService.ts`, `scripts/dedupe-leads-once.mjs`
+
+Critério de duplicidade:
+- nome normalizado igual
+- e (telefone ou site ou originLink iguais)
+
+Ação:
+- merge de payload e contatos;
+- manutenção de lead primário;
+- soft delete dos duplicados;
+- tentativa de merge atômico via RPC `apply_lead_merge`.
+
+---
+
+## 9) Backend e Persistência
+
+## 9.1 Supabase Client
+Arquivo: `supabaseClient.ts`
+
+Requer:
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+Sem env válida, app entra com mensagem de configuração incompleta.
+
+## 9.2 Serviço de sync
 Arquivo: `services/leadService.ts`
 
-### Storage local
-Chaves:
-- `coldflow_db` (leads)
-- `coldflow_queue` (fila de sync)
-- `coldflow_events_queue` (fila de eventos)
+### Chaves locais
+- `coldflow_db`
+- `coldflow_queue`
+- `coldflow_events_queue`
 - `coldflow_last_sync`
 - `coldflow_last_full_sync`
 - `coldflow_backend_disabled`
 
-### Fluxo
-1) UI salva local → fila de sync (`SAVE`/`DELETE`)
-2) `processQueue()` envia para Supabase (upsert)
-3) Sync incremental:
-   - Só executa se passou `MIN_SYNC_INTERVAL_MS`
-   - Busca rows com `updated_at > lastSync`
-4) Full sync:
-   - 1x por dia após `MORNING_SYNC_HOUR`
+### Ciclos
+- `processQueue()` a cada 5s
+- `fetchRemote()` a cada 2 min (com guarda de 10 min)
+- full sync diário após 06:00 (`MORNING_SYNC_HOUR`)
 
-### Eventos e histórico
-- `lead_events` registra mudanças (status, contato, reunião, retorno, etc.)
-- `stats_daily` salva snapshot diário (dashboard)
-- `tracker_daily` salva métricas diárias para sugestões
-- **Delete remoto** usa `update` com `deleted_at` (não sobrescreve `payload`).
-
-### Deduplicação
-- Merge automático no save/import
-- Botão “Deduplicar” no app
-- RPC `apply_lead_merge` quando disponível (fallback local)
+### Estratégias
+- bootstrap de dados locais no primeiro sync
+- merge remoto/local por `updatedAt`
+- compactação de soft deletes já sincronizados
+- circuito de fallback local quando backend bloqueia (401/403)
+- fila de eventos (`lead_events`) para analytics
 
 ---
 
-## 8) Importação CSV/XLSX
+## 10) Banco de Dados (schema)
 
-Arquivos: `components/ImportLeadsModal.tsx`, `utils/importLeads.ts`
+Arquivo: `supabase/schema.sql`
 
-### Formatos aceitos
-- `.csv`
-- `.xlsx` / `.xls`
+### Tabelas
+- `leads`: payload JSONB + timestamps
+- `stats_daily`: snapshots do dashboard
+- `lead_events`: trilha de eventos operacionais
+- `tracker_daily`: métricas diárias de cadência
 
-### Colunas reconhecidas (auto)
-Aliases em `utils/importLeads.ts → HEADER_ALIASES`
-
-### Origem
-Por padrão: **Google Maps**
-No modal:
-- Google Maps, Instagram, Facebook, WhatsApp, Site, Indicação, Outro
-- `Outro` permite texto manual
-
-### Segmentação automática
-Inferida por palavras‑chave (`SEGMENT_KEYWORDS`).
-
-### Deduplicação durante import
-Leads duplicados são **mesclados** no momento da importação.
-**Importação não gera histórico** (`lead_events`), pois é tratada como lead novo.
+### Segurança
+- RLS habilitado em todas as tabelas
+- Policies por allowlist de e-mail
+- RPC `apply_lead_merge` com validação explícita por e-mail
 
 ---
 
-## 9) Exportação CSV/XLSX
+## 11) Script operacional de dedupe (one-shot)
 
-Arquivos: `components/ExportLeadsModal.tsx`, `utils/exportLeads.ts`
+Arquivo: `scripts/dedupe-leads-once.mjs`
 
-### Formatos
-- CSV
-- XLSX
-
-### Seleção de segmentos
-- “Todos” ou “Selecionar” (multi‑select)
-
-### Colunas exportadas
-GOOGLEMAPS, EMPRESA, AVALIAÇÃO, PROFISSÃO, TELEFONE, SITE, ORIGEM, DECISOR, STATUS,  
-TICKET, TENTATIVAS, ÚLTIMO CONTATO, PRÓXIMA TENTATIVA, OBSERVAÇÕES
+- Usa service role key
+- `DRY_RUN` ligado por padrão
+- paginação de leitura
+- merge + soft delete em lote
+- útil para limpeza inicial de base legada
 
 ---
 
-## 10) Filtros e lista
+## 12) Execução e Deploy
 
-Arquivo: `App.tsx`
-
-- Busca global (“Encontrar algo específico”): varre empresa, segmento, decisores/atendentes, telefones, site, origem, status, notas, datas e links. Com texto ativo, **ignora** filtros de status/segmento.
-- **Filtro de segmento** (dropdown com checkboxes + busca).
-- **Filtro de status** (pills com contagem). Clicar novamente no mesmo status volta para **Novo Lead**.
-- Leads com **Próximo contato agendado** saem de **Novo Lead** e entram no filtro **Próximo contato**, mesmo sem mudar o status.
-- Se o lead for **Novo Lead** mas tiver **Próximo contato agendado**, o badge de status “Novo Lead” não aparece — fica **apenas** o badge de Próximo contato.
-- Status padrão: **Novo Lead**.
-- “Tentar em 30 dias” aparece em “Todos”, mas fica **no final**.
-- “Não tentar mais” fica **no final**.
-- Leads com status **Não tentar mais** não aparecem em **Próximo contato** (mesmo se agendado) e só entram em “Todos” (no final) ou no próprio filtro.
-- Lista paginada (padrão 10, opções 10/20/30 com persistência local).
-- Colunas da tabela incluem **Último Contato** e **Próximo Contato**.
-- Filtro “Próximo contato” mostra **pendentes** e **agendados**.
-- No filtro “Próximo contato”, a lista é ordenada por **data/hora mais próxima primeiro**: agendados primeiro (data/hora do retorno/reunião/tentativa), depois pendentes usando `lastContactDate`.
-- **Próximo Contato (coluna)**: prioridade visual **Reunião agendada > Retorno agendado > Próxima tentativa** (badge + data/hora).
-- **Badges de Próximo contato**:
-  - **Agendado**: `nextAttemptDate` definido (próxima tentativa) → badge “Próximo contato agendado” (azul).
-  - **Pendente**: sem `nextAttemptDate`/`callbackDate`/`meetingDate` → badge “Próximo contato pendente” (âmbar).
-  - Pendente só aparece quando `lastContactDate` existe, status não é avançado (reunião/proposta enviada/aceita/não tentar mais) e o contato foi nos **últimos 7 dias**.
-  - Intensidade: 0–2 dias = leve (a menos que o score ≥ limiar), 3–7 dias = forte.
-  - `needsNextContactOverride` força badge forte.
-  - Score do alerta = `attempts` (máx 4) + peso do status (decisor interessado = +2; decisor frio/decisor não atendeu = +1).
-  - Limiar padrão: **4** (arquivo `utils.ts`).
-
----
-
-## 11) UI / Seções
-
-### Navbar
-- ColdFlow sempre visível + sync minimalista.
-
-### Fila do dia
-- `getQueueStatus()` + `calculatePriorityScore()`.
-- Ordem de prioridade (Queue):
-  1) **Reunião** (`meetingDate`) — passada → urgente; hoje → prioridade máxima
-  2) **Retorno** (`callbackDate`) — atrasado → urgente; hoje → prioridade; se hora vencida → urgente
-  3) **Proposta enviada** — **apenas** se `nextAttemptDate` existir e for hoje/atrasado
-  4) **Decisor interessado** — entra quando `nextAttemptDate` <= hoje
-  5) **Follow‑up geral** — `nextAttemptDate` <= hoje (exceto Não tentar mais / Tentar em 30 / Proposta aceita)
-  6) **Tentar em 30 dias** — só quando a data chega (hoje/atrasado)
-- Fila é ordenada por `sortOrder` + **score de prioridade**.
-- Quando há horário definido **hoje**, ordena por hora (com hora primeiro; sem hora depois).
-- Cards da fila exibem **badge de horário** quando há `meetingTime`, `callbackTime` ou `nextAttemptTime` (follow‑up/proposta/interessado/tentar em 30).
-- “Não tentar mais” fica sempre no fim (fora da fila).
-
-### Mecanismo inteligente (priorização)
-- `getQueueStatus()` classifica o lead em reunião/retorno/proposta/interessado/follow‑up/tentar em 30 com base nas datas.
-- `calculatePriorityScore()` soma pesos (ticket, status, datas, qualidade do site e dores) para ordenar dentro do mesmo grupo.
-- Ordenação final: `sortOrder` → horário (se hoje) → score.
-- Ajustes de pesos e limiares ficam em `utils.ts`.
-
-### Prioridade (score)
-Arquivo: `utils.ts`
-- **Ticket**: ≥ 4500 (+25), ≥ 2500 (+15), ≥ 1600 (+8), >0 (+4)
-- **Status**:
-  - Reunião marcada (+35)
-  - Proposta enviada (+25)
-  - Decisor interessado (+20)
-  - Decisor frio (+6)
-  - Decisor não atendeu (+2)
-  - Proposta aceita (+5)
-  - Tentar em 30 dias (−8)
-  - Não tentar mais (−50)
-- **Reunião (data)**: passada (+30), hoje (+35), amanhã (+28), ≤3 dias (+20), ≤7 dias (+12), >7 dias (+6)
-- **Retorno (data)**: passado (+18), hoje (+16), amanhã (+12), ≤3 dias (+8), ≤7 dias (+4)
-- **Qualidade do site**: sem site (+20), quebrado (+14), ruim (+8), ok (+2)
-- **Dores do site**: +3 por dor (máx 4 dores)
-- **Extras**:
-  - Retorno pedido pelo decisor (+10)
-  - Nome do decisor preenchido (+6)
-  - Ticket alto + interessado + retorno (+20)
-  - Ticket alto + retorno após 2+ tentativas (+15)
-  - Sem site + ticket alto + retorno após 2+ tentativas (+25)
-  - Sem site + ticket alto + reunião → score mínimo 110
-- Score mínimo é 0.
-
-### Ordenação na lista (prioridade visual)
-- Grupo 0: status normais (topo)
-- Grupo 1: **Tentar em 30 dias** (ordenado por `nextAttemptDate`)
-- Grupo 2: **Não tentar mais**
-- Dentro do mesmo grupo: **score desc**, depois `updatedAt` desc.
-
-### Lista completa
-- Tabela desktop + cards mobile.
-- Header sticky.
-- Botões rápidos por lead: Maps / Site / WhatsApp.
-- Botão **Deduplicar** (topo da lista).
-- **Próximo Contato** na lista sempre mostra **Reunião** / **Retorno** / **Próxima tentativa** (nesta ordem). 
-
-### Modais
-- LeadModal (edição)
-- ConfirmationModal (exclusão/logout/dedupe)
-- ImportLeadsModal
-- ExportLeadsModal
-
-### Script & Diagnóstico (LeadModal)
-- Aba **Script & Diag.** com script auto + manual.
-- **Auto (completo)** é gerado em `utils.ts → generateDiagnosticScript` com fluxo **ABERTURA → PERMISSÃO → CONTEXTO + ANÁLISE (consultor) → DOR/Oportunidade → PROPOSTA → BENEFÍCIOS → CTA**.
-- **Manual (micro)** é a versão curta editável; alternar entre modos não apaga o rascunho.
-- Auto usa: empresa, segmento, tempo de empresa, rating, estado/URL do site e **incrementador de dor** (pain points + estado do site).
-- Regra do tempo de empresa:
-  - **10+ anos**: legado/autoridade + digital à altura da história.
-  - **<10 anos**: crescimento/escala + competição com quem já tem presença forte.
-- CTA com horários sugeridos fixos (hoje 15h30 / amanhã 08h30).
-
-### Notificações
-- Sem `alert` nativo; feedback via **toast discreto**.
-
----
-
-## 12) Dashboard & Sugestor
-
-Arquivo: `components/DashboardStats.tsx`
-
-- Barras financeiras: **Em negociação / Alta chance / Fechados / Recebido / Sinal**
-- Toggle de visão: geral ↔ receita estimada
-- Filtros de período: Hoje / 7 dias / 30 dias / Tudo
-- Eventos contam: propostas, reuniões, pagamentos, follow‑ups
-- “Pagamentos feitos” só conta quando há valor pago (> 0).
-- Para 7d/30d/Tudo, se `lead_events` estiver vazio/incompleto, o dashboard faz **fallback** para dados atuais (não zera).
-- **Propostas enviadas** contam **somente** status `Proposta enviada` (Proposta aceita não entra).
-
-### Sugestões inteligentes (helper)
-Baseadas em `lead_events` + `tracker_daily`:
-- Melhor horário histórico
-- Cadência sugerida (média de follow‑up)
-- Taxa de avanço para reunião
-- Próximos contatos definidos
-- **Peso temporal**: eventos recentes têm mais peso (half‑life ≈ 21 dias).
-- **Confiança**: baixa/média/alta conforme volume de amostras.
-- Só exibe sugestões quando há dados mínimos (ex: ≥6 contatos para taxa de avanço).
-- Máx de 3 sugestões na visão geral (2 na compacta).
-- **Melhor horário** usa apenas contatos com hora definida no operacional (`lastContactDate` com hora). Se não houver hora, não influencia no melhor horário.
-- Cada sugestão exibe **quantos eventos** foram usados + tooltip com a base (ex.: contacted / next_attempt_set).
-
-Se não houver dados suficientes:
-- “Ainda não há dados suficientes.”
-
----
-
-## 13) Deduplicação (detalhes)
-
-### Critério atual
-Lead duplicado se:
-- **Nome normalizado igual** +
-- **Telefone OU site OU link de origem iguais**
-
-### Botão no app
-- “Deduplicar” → analisa grupos → confirma
-- Merge + soft delete duplicados
-
-### RPC (server‑side)
-- `apply_lead_merge` garante merge atômico no Supabase
-
-### Script único
-- `scripts/dedupe-leads-once.mjs`
-- Útil para limpeza inicial com service role
-
----
-
-## 14) Como instalar e rodar
-
-1) `npm install`
-2) Criar `.env.local` com:
+### Comandos
+```bash
+npm install
+npm run dev
+npm run build
 ```
+
+### Variáveis mínimas
+```bash
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_ANON_KEY=...
 ```
-3) Executar `supabase/schema.sql` no Supabase SQL Editor
-4) `npm run dev`
+
+### Observação de configuração
+`vite.config.ts` também define `process.env.GEMINI_API_KEY` (não há uso direto no app auditado).
 
 ---
 
-## 15) Segurança
+## 13) Achados Técnicos da Auditoria
 
-- **Nunca** usar `sb_secret` no frontend.
-- RLS + allowlist são a proteção real.
-- RPC verifica e‑mail antes de executar merge.
+Type-check (`npx tsc --noEmit`) falhou com os seguintes pontos:
+
+1. `App.tsx:1491`
+- `setStatusDropdownOpen` não existe no escopo.
+- risco: erro em runtime ao clicar no botão de filtro de segmento.
+
+2. `services/leadService.ts:220`
+- atribuição de `string` para `paidValueType` tipado como união restrita.
+
+3. `services/leadService.ts:277`
+- objeto parcial sendo tratado como `Lead` completo.
+
+4. `supabaseClient.ts:3-4`
+- `import.meta.env` sem tipagem reconhecida (`vite/client` faltando na configuração de tipos).
+
+5. `utils/importLeads.ts:37`
+- `Record<Segmento, string[]>` sem chave `Segmento.GENERICO` declarada no literal.
+
+6. `utils/importLeads.ts:203`
+7. `utils/importLeads.ts:205`
+- atribuições de `string` para campo tipado como `OriginType`.
+
+### Impacto
+- build de produção passa, mas há inconsistências de tipagem e risco funcional.
+- recomenda-se corrigir esses 7 pontos antes de próxima release.
 
 ---
 
-## 16) Ajustes comuns
+## 14) Segurança e Governança
 
-- Horário do full sync: `MORNING_SYNC_HOUR` em `services/leadService.ts`
-- Intervalo incremental: `MIN_SYNC_INTERVAL_MS`
-- Segmentos (import): `SEGMENT_KEYWORDS`
-- Origens (import): `detectOriginFromLink` / `detectOriginFromText`
-- Tamanho da página: `PAGE_SIZE_OPTIONS` em `App.tsx`
-- Colunas exportadas: `utils/exportLeads.ts`
-- Allowlist e auth flags: `authConfig.ts`
-- Regras do **Próximo contato** (pendente): `utils.ts → getNextContactLevel`
-- Labels/cores de badge de próximo contato: `App.tsx → getNextContactBadgeInfo`
-- Lógica da fila e horários: `utils.ts → getQueueStatus`
-- Busca global: `App.tsx → buildSearchableText` / `leadMatchesSearch`
-- Script (auto/micro): `utils.ts → generateDiagnosticScript`
+- App usa `anon key` no frontend (correto para Supabase Client).
+- Controle real de acesso depende de:
+  - allowlist no frontend;
+  - RLS/policies no banco.
+- Não há service role key no frontend.
+- Script de dedupe usa service role apenas em ambiente controlado.
 
 ---
 
-## 17) Status atual
+## 15) Checklist funcional (estado atual)
 
-- ✅ Migração Supabase + RLS
-- ✅ Soft delete + sync automático
-- ✅ Importação CSV/XLSX
-- ✅ Exportação CSV/XLSX
-- ✅ Origem + avaliação detectadas
-- ✅ Filtro multi‑segmento + status em pills com contagem
-- ✅ Campo “Link do Site” no Diagnóstico
-- ✅ Lista paginada + header sticky
-- ✅ SiteState enxuto + normalização
-- ✅ Modal operacional reorganizado
-- ✅ Dashboard com toggle + termos BR
-- ✅ Eventos + histórico (`lead_events`, `stats_daily`)
-- ✅ Deduplicação local + RPC (`apply_lead_merge`)
-- ✅ Tracker diário (`tracker_daily`) + sugestões inteligentes
-- ✅ Toasts (sem alert)
-- ✅ Busca global que ignora filtros quando há texto
-- ✅ Badges “Próximo contato” (agendado x pendente)
-- ✅ Recuperação de senha com validação de link
-- ✅ Script consultivo auto/micro com tempo de empresa
+- [x] Login Google + email/senha + reset de senha
+- [x] Sync offline-first com fila local
+- [x] Dashboard com histórico/sugestões
+- [x] Fila de hoje com priorização avançada
+- [x] Lista com busca, filtros e paginação
+- [x] Edição completa de lead (modal)
+- [x] Modo Blitz para operação rápida
+- [x] Importação CSV/XLSX
+- [x] Exportação CSV/XLSX
+- [x] Deduplicação local + RPC
+- [x] Soft delete
+- [x] RLS + allowlist no Supabase
+- [ ] Type-check TS limpo (pendente; ver seção 13)
+
+---
+
+## 16) Próximas ações recomendadas
+
+1. Corrigir os erros de TypeScript listados na seção 13.
+2. Adicionar script de CI para bloquear merge com `tsc --noEmit` quebrado.
+3. Externalizar allowlist para configuração segura (evitar hardcode duplicado em múltiplos arquivos).
+4. Revisar uso de `process.env.GEMINI_API_KEY` em `vite.config.ts` (aparentemente legado).
+5. Escrever testes mínimos para:
+   - regras de `getQueueStatus`;
+   - `getNextContactLevel`;
+   - merge/dedupe em `leadService`.
+

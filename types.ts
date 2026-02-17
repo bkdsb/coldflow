@@ -134,6 +134,8 @@ export interface Lead {
   callbackDate: string | null; 
   callbackTime: string | null; 
   callbackRequestedBy: ContactPersonType | string; 
+  callbackRequesterName?: string | null;
+  callbackRequesterNameManual?: boolean;
   
   meetingDate: string | null;
   meetingTime: string | null;
